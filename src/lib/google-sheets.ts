@@ -17,9 +17,9 @@ export interface InternalCatalogResult {
 }
 
 const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
-
-// تم تعديل الرابط لجلب الورقة الأولى مباشرة بغض النظر عن اسمها وتجنب أي خطأ 404/HTML
-const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vStBwnsl1SFUGSwQZudFPSF15OYIwB7c4EbmhJlM0W_mm_FSy9QGJmz6kT_VOgOlM7IfOV8W7azgfEg/pub?output=csv`;
+const WORKSHEET_NAME = "Sheet1";
+// استخدام رابط API مباشر وآمن يتجاوز حظر وحماية جوجل
+const API_URL = `https://opensheet.elk.sh/${SPREADSHEET_ID}/${WORKSHEET_NAME}`;
 
 const CACHE_TTL_MS = 15 * 1000;
 
@@ -30,67 +30,17 @@ let cachedInternalCatalog: {
 
 export const FALLBACK_PRODUCTS: InternalProduct[] = [];
 
-export function parseCSV(csvText: string): string[][] {
-  const rows: string[][] = [];
-  let currentRow: string[] = [];
-  let currentField = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < csvText.length; i++) {
-    const char = csvText[i];
-    const nextChar = csvText[i + 1];
-
-    if (inQuotes) {
-      if (char === '"' && nextChar === '"') {
-        currentField += '"';
-        i++;
-      } else if (char === '"') {
-        inQuotes = false;
-      } else {
-        currentField += char;
-      }
-    } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ",") {
-        currentRow.push(currentField);
-        currentField = "";
-      } else if (char === "\r" && nextChar === "\n") {
-        currentRow.push(currentField);
-        rows.push(currentRow);
-        currentRow = [];
-        currentField = "";
-        i++;
-      } else if (char === "\n" || char === "\r") {
-        currentRow.push(currentField);
-        rows.push(currentRow);
-        currentRow = [];
-        currentField = "";
-      } else {
-        currentField += char;
-      }
-    }
-  }
-
-  if (currentField.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentField);
-    rows.push(currentRow);
-  }
-
-  return rows;
-}
-
-function parseNumericPrice(raw: string): number | null {
+function parseNumericPrice(raw: any): number | null {
   if (!raw) return null;
-  const cleaned = raw.replace(/[^\d.-]/g, "").trim();
+  const cleaned = String(raw).replace(/[^\d.-]/g, "").trim();
   if (!cleaned) return null;
   const num = Number(cleaned);
   return Number.isFinite(num) && num >= 0 ? num : null;
 }
 
-function parseNumericProfit(raw: string | undefined): number | null {
+function parseNumericProfit(raw: any): number | null {
   if (!raw) return null;
-  const trimmed = raw.trim();
+  const trimmed = String(raw).trim();
   if (trimmed.includes("%")) return null;
   const cleaned = trimmed.replace(/[^\d.-]/g, "").trim();
   if (!cleaned) return null;
@@ -98,11 +48,11 @@ function parseNumericProfit(raw: string | undefined): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-function extractUrls(rawCells: string[]): string[] {
+function extractUrls(rawCells: any[]): string[] {
   const urls: string[] = [];
   for (const cell of rawCells) {
     if (!cell) continue;
-    const parts = cell
+    const parts = String(cell)
       .split(/[\s,\n\r|;]+/)
       .map((s) => s.trim())
       .filter((s) => s.startsWith("http://") || s.startsWith("https://"));
@@ -128,91 +78,57 @@ export async function fetchInternalCatalog(options?: {
   }
 
   try {
-    const response = await fetch(GOOGLE_SHEET_CSV_URL, {
-      cache: "no-store",
-      headers: {
-        Accept: "text/csv,text/plain,*/*",
-      },
-    });
-
+    const response = await fetch(API_URL, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error(`Google Sheet returned HTTP ${response.status}`);
+      throw new Error(`API returned HTTP ${response.status}`);
     }
 
-    const csvText = await response.text();
-    if (!csvText || !csvText.trim()) {
-      throw new Error("Empty CSV received");
-    }
-
-    // التحقق من أن الاستجابة ليست صفحة HTML بل ملف CSV حقيقي
-    if (csvText.trim().startsWith("<!DOCTYPE") || csvText.trim().startsWith("<html")) {
-      throw new Error("Received HTML page instead of CSV data from Google Sheets");
-    }
-
-    const rows = parseCSV(csvText);
-    if (rows.length < 2) {
-      throw new Error("Not enough rows in CSV");
-    }
-
-    const headerRow = rows[0].map((h) => h.trim().toLowerCase());
-    
-    // البحث عن الأعمدة باللغتين العربية والإنجليزية لضمان قراءة البيانات
-    const colIndex = {
-      category: headerRow.findIndex((h) => h === "category" || h === "فئة" || h === "القسم" || h === "التصنيف"),
-      productName: headerRow.findIndex((h) => h === "product name" || h === "name" || h === "اسم المنتج" || h === "المنتج"),
-      price: headerRow.findIndex((h) => h === "price" || h === "السعر"),
-      profit: headerRow.findIndex((h) => h === "profit" || h === "الربح"),
-      description: headerRow.findIndex((h) => h === "description" || h === "الوصف"),
-      primaryImage: headerRow.findIndex((h) => h === "primary image" || h === "image" || h === "الصورة" || h === "الصورة الرئيسية"),
-      extraImages: headerRow.findIndex((h) => h === "extra images" || h === "صور اضافية"),
-    };
-
-    if (colIndex.category === -1 || colIndex.productName === -1 || colIndex.price === -1) {
-      throw new Error("Missing required columns in Sheet");
+    const rows = await response.json();
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new Error("Empty or invalid data received from sheet");
     }
 
     const products: InternalProduct[] = [];
     const categoriesSet = new Set<string>();
     let currentCategory = "";
 
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || row.every((c) => !c.trim())) continue;
+      if (!row) continue;
 
-      const rawCat = (row[colIndex.category] ?? "").trim();
+      const getVal = (keys: string[]) => {
+        for (const key of Object.keys(row)) {
+          const cleanKey = key.trim().toLowerCase();
+          if (keys.includes(cleanKey)) {
+            return row[key];
+          }
+        }
+        return "";
+      };
+
+      const rawCat = String(getVal(["category", "فئة", "القسم", "التصنيف"])).trim();
       if (rawCat) currentCategory = rawCat;
       const effectiveCategory = rawCat || currentCategory;
 
-      const rawName = (row[colIndex.productName] ?? "").trim();
-      const rawPrice = (row[colIndex.price] ?? "").trim();
+      const rawName = String(getVal(["product name", "name", "اسم المنتج", "المنتج"])).trim();
+      const rawPrice = String(getVal(["price", "السعر"])).trim();
 
       if (!effectiveCategory || !rawName || !rawPrice) continue;
 
       const price = parseNumericPrice(rawPrice);
       if (price === null) continue;
 
-      const rawProfit = colIndex.profit !== -1 ? row[colIndex.profit] : undefined;
+      const rawProfit = getVal(["profit", "الربح"]);
       const profit = parseNumericProfit(rawProfit);
 
-      const description =
-        colIndex.description !== -1 ? (row[colIndex.description] ?? "").trim() : "";
+      const description = String(getVal(["description", "الوصف"])).trim();
 
-      const primaryImageRaw =
-        colIndex.primaryImage !== -1 ? (row[colIndex.primaryImage] ?? "").trim() : "";
+      const primaryImageRaw = String(getVal(["primary image", "image", "الصورة", "الصورة الرئيسية"])).trim();
       const primaryUrls = extractUrls([primaryImageRaw]);
       const primaryImage = primaryUrls[0] || "";
 
-      const extraCells: string[] = [];
-      if (colIndex.extraImages !== -1) {
-        extraCells.push(row[colIndex.extraImages] ?? "");
-        for (let c = colIndex.extraImages + 1; c < row.length; c++) {
-          if (!headerRow[c]) {
-            extraCells.push(row[c] ?? "");
-          }
-        }
-      }
-
-      const extraImages = extractUrls(extraCells).filter((u) => u !== primaryImage);
+      const extraImagesRaw = String(getVal(["extra images", "صور اضافية"])).trim();
+      const extraImages = extractUrls([extraImagesRaw]).filter((u) => u !== primaryImage);
       const allImages = primaryImage ? [primaryImage, ...extraImages] : [...extraImages];
 
       const id = `${effectiveCategory}__${rawName}__${i}`
@@ -237,10 +153,7 @@ export async function fetchInternalCatalog(options?: {
 
     const result: InternalCatalogResult = {
       products,
-      categories:
-        categoriesSet.size > 0
-          ? Array.from(categoriesSet)
-          : [],
+      categories: categoriesSet.size > 0 ? Array.from(categoriesSet) : [],
       fetchedAt: new Date().toISOString(),
       fromFallbackCache: false,
     };
@@ -252,7 +165,7 @@ export async function fetchInternalCatalog(options?: {
 
     return result;
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Error fetching sheet";
+    const errorMsg = err instanceof Error ? err.message : "Error fetching sheet data";
     if (cachedInternalCatalog) {
       return {
         ...cachedInternalCatalog.data,
