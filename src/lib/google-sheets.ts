@@ -19,7 +19,7 @@ export interface InternalCatalogResult {
 const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
 const WORKSHEET_NAME = "Sheet1";
 
-const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
+const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
   WORKSHEET_NAME
 )}`;
 
