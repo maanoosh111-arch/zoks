@@ -19,7 +19,7 @@ export interface InternalCatalogResult {
 const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
 
 // تم تعديل الرابط لجلب الورقة الأولى مباشرة بغض النظر عن اسمها وتجنب أي خطأ 404/HTML
-const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=csv`;
+const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vStBwnsl1SFUGSwQZudFPSF15OYIwB7c4EbmhJlM0W_mm_FSy9QGJmz6kT_VOgOlM7IfOV8W7azgfEg/pub?output=csv`;
 
 const CACHE_TTL_MS = 15 * 1000;
 
