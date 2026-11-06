@@ -17,11 +17,9 @@ export interface InternalCatalogResult {
 }
 
 const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
-const WORKSHEET_NAME = "Sheet1";
 
-const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
-  WORKSHEET_NAME
-)}`;
+// تم تعديل الرابط لجلب الورقة الأولى مباشرة بغض النظر عن اسمها وتجنب أي خطأ 404/HTML
+const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=csv`;
 
 const CACHE_TTL_MS = 15 * 1000;
 
@@ -30,7 +28,6 @@ let cachedInternalCatalog: {
   timestamp: number;
 } | null = null;
 
-// All products must strictly come from the official Google Sheet only. No fake or mock products.
 export const FALLBACK_PRODUCTS: InternalProduct[] = [];
 
 export function parseCSV(csvText: string): string[][] {
@@ -147,20 +144,27 @@ export async function fetchInternalCatalog(options?: {
       throw new Error("Empty CSV received");
     }
 
+    // التحقق من أن الاستجابة ليست صفحة HTML بل ملف CSV حقيقي
+    if (csvText.trim().startsWith("<!DOCTYPE") || csvText.trim().startsWith("<html")) {
+      throw new Error("Received HTML page instead of CSV data from Google Sheets");
+    }
+
     const rows = parseCSV(csvText);
     if (rows.length < 2) {
       throw new Error("Not enough rows in CSV");
     }
 
     const headerRow = rows[0].map((h) => h.trim().toLowerCase());
+    
+    // البحث عن الأعمدة باللغتين العربية والإنجليزية لضمان قراءة البيانات
     const colIndex = {
-      category: headerRow.findIndex((h) => h === "category"),
-      productName: headerRow.findIndex((h) => h === "product name"),
-      price: headerRow.findIndex((h) => h === "price"),
-      profit: headerRow.findIndex((h) => h === "profit"),
-      description: headerRow.findIndex((h) => h === "description"),
-      primaryImage: headerRow.findIndex((h) => h === "primary image"),
-      extraImages: headerRow.findIndex((h) => h === "extra images"),
+      category: headerRow.findIndex((h) => h === "category" || h === "فئة" || h === "القسم" || h === "التصنيف"),
+      productName: headerRow.findIndex((h) => h === "product name" || h === "name" || h === "اسم المنتج" || h === "المنتج"),
+      price: headerRow.findIndex((h) => h === "price" || h === "السعر"),
+      profit: headerRow.findIndex((h) => h === "profit" || h === "الربح"),
+      description: headerRow.findIndex((h) => h === "description" || h === "الوصف"),
+      primaryImage: headerRow.findIndex((h) => h === "primary image" || h === "image" || h === "الصورة" || h === "الصورة الرئيسية"),
+      extraImages: headerRow.findIndex((h) => h === "extra images" || h === "صور اضافية"),
     };
 
     if (colIndex.category === -1 || colIndex.productName === -1 || colIndex.price === -1) {
