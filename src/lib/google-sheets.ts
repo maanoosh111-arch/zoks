@@ -16,10 +16,8 @@ export interface InternalCatalogResult {
   error?: string;
 }
 
-const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
-const WORKSHEET_NAME = "Sheet1";
-// استخدام رابط API مباشر وآمن يتجاوز حظر وحماية جوجل
-const API_URL = `https://opensheet.elk.sh/${SPREADSHEET_ID}/${WORKSHEET_NAME}`;
+// رابط مباشر وثابت لخدمة OpenSheet التي نجحت معك في المتصفح
+const API_URL = "https://opensheet.elk.sh/14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88/Sheet1";
 
 const CACHE_TTL_MS = 15 * 1000;
 
@@ -79,11 +77,15 @@ export async function fetchInternalCatalog(options?: {
 
   try {
     const response = await fetch(API_URL, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`API returned HTTP ${response.status}`);
+    const textResponse = await response.text();
+
+    // حماية تامة: التحقق من أن الاستجابة ليست صفحة HTML (مثل خطأ Vercel أو 404)
+    const trimmedText = textResponse.trim();
+    if (trimmedText.startsWith("<!DOCTYPE") || trimmedText.startsWith("<html")) {
+      throw new Error("Received HTML page instead of JSON data");
     }
 
-    const rows = await response.json();
+    const rows = JSON.parse(textResponse);
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new Error("Empty or invalid data received from sheet");
     }
