@@ -16,8 +16,12 @@ export interface InternalCatalogResult {
   error?: string;
 }
 
-// رابط مباشر وثابت لخدمة OpenSheet التي نجحت معك في المتصفح
-const API_URL = "https://opensheet.elk.sh/14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88/Sheet1";
+const SPREADSHEET_ID = "14G5H-cFTOfmW0dHS_OEbz05cuQTbWuEvn8pMgk81Z88";
+const WORKSHEET_NAME = "Sheet1";
+
+const GOOGLE_SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
+  WORKSHEET_NAME
+)}`;
 
 const CACHE_TTL_MS = 15 * 1000;
 
@@ -26,19 +30,70 @@ let cachedInternalCatalog: {
   timestamp: number;
 } | null = null;
 
+// All products must strictly come from the official Google Sheet only. No fake or mock products.
 export const FALLBACK_PRODUCTS: InternalProduct[] = [];
 
-function parseNumericPrice(raw: any): number | null {
+export function parseCSV(csvText: string): string[][] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentField = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+    const nextChar = csvText[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentField += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentField += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ",") {
+        currentRow.push(currentField);
+        currentField = "";
+      } else if (char === "\r" && nextChar === "\n") {
+        currentRow.push(currentField);
+        rows.push(currentRow);
+        currentRow = [];
+        currentField = "";
+        i++;
+      } else if (char === "\n" || char === "\r") {
+        currentRow.push(currentField);
+        rows.push(currentRow);
+        currentRow = [];
+        currentField = "";
+      } else {
+        currentField += char;
+      }
+    }
+  }
+
+  if (currentField.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentField);
+    rows.push(currentRow);
+  }
+
+  return rows;
+}
+
+function parseNumericPrice(raw: string): number | null {
   if (!raw) return null;
-  const cleaned = String(raw).replace(/[^\d.-]/g, "").trim();
+  const cleaned = raw.replace(/[^\d.-]/g, "").trim();
   if (!cleaned) return null;
   const num = Number(cleaned);
   return Number.isFinite(num) && num >= 0 ? num : null;
 }
 
-function parseNumericProfit(raw: any): number | null {
+function parseNumericProfit(raw: string | undefined): number | null {
   if (!raw) return null;
-  const trimmed = String(raw).trim();
+  const trimmed = raw.trim();
   if (trimmed.includes("%")) return null;
   const cleaned = trimmed.replace(/[^\d.-]/g, "").trim();
   if (!cleaned) return null;
@@ -46,11 +101,11 @@ function parseNumericProfit(raw: any): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-function extractUrls(rawCells: any[]): string[] {
+function extractUrls(rawCells: string[]): string[] {
   const urls: string[] = [];
   for (const cell of rawCells) {
     if (!cell) continue;
-    const parts = String(cell)
+    const parts = cell
       .split(/[\s,\n\r|;]+/)
       .map((s) => s.trim())
       .filter((s) => s.startsWith("http://") || s.startsWith("https://"));
@@ -76,61 +131,84 @@ export async function fetchInternalCatalog(options?: {
   }
 
   try {
-    const response = await fetch(API_URL, { cache: "no-store" });
-    const textResponse = await response.text();
+    const response = await fetch(GOOGLE_SHEET_CSV_URL, {
+      cache: "no-store",
+      headers: {
+        Accept: "text/csv,text/plain,*/*",
+      },
+    });
 
-    // حماية تامة: التحقق من أن الاستجابة ليست صفحة HTML (مثل خطأ Vercel أو 404)
-    const trimmedText = textResponse.trim();
-    if (trimmedText.startsWith("<!DOCTYPE") || trimmedText.startsWith("<html")) {
-      throw new Error("Received HTML page instead of JSON data");
+    if (!response.ok) {
+      throw new Error(`Google Sheet returned HTTP ${response.status}`);
     }
 
-    const rows = JSON.parse(textResponse);
-    if (!Array.isArray(rows) || rows.length === 0) {
-      throw new Error("Empty or invalid data received from sheet");
+    const csvText = await response.text();
+    if (!csvText || !csvText.trim()) {
+      throw new Error("Empty CSV received");
+    }
+
+    const rows = parseCSV(csvText);
+    if (rows.length < 2) {
+      throw new Error("Not enough rows in CSV");
+    }
+
+    const headerRow = rows[0].map((h) => h.trim().toLowerCase());
+    const colIndex = {
+      category: headerRow.findIndex((h) => h === "category"),
+      productName: headerRow.findIndex((h) => h === "product name"),
+      price: headerRow.findIndex((h) => h === "price"),
+      profit: headerRow.findIndex((h) => h === "profit"),
+      description: headerRow.findIndex((h) => h === "description"),
+      primaryImage: headerRow.findIndex((h) => h === "primary image"),
+      extraImages: headerRow.findIndex((h) => h === "extra images"),
+    };
+
+    if (colIndex.category === -1 || colIndex.productName === -1 || colIndex.price === -1) {
+      throw new Error("Missing required columns in Sheet");
     }
 
     const products: InternalProduct[] = [];
     const categoriesSet = new Set<string>();
     let currentCategory = "";
 
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row) continue;
+      if (!row || row.every((c) => !c.trim())) continue;
 
-      const getVal = (keys: string[]) => {
-        for (const key of Object.keys(row)) {
-          const cleanKey = key.trim().toLowerCase();
-          if (keys.includes(cleanKey)) {
-            return row[key];
-          }
-        }
-        return "";
-      };
-
-      const rawCat = String(getVal(["category", "فئة", "القسم", "التصنيف"])).trim();
+      const rawCat = (row[colIndex.category] ?? "").trim();
       if (rawCat) currentCategory = rawCat;
       const effectiveCategory = rawCat || currentCategory;
 
-      const rawName = String(getVal(["product name", "name", "اسم المنتج", "المنتج"])).trim();
-      const rawPrice = String(getVal(["price", "السعر"])).trim();
+      const rawName = (row[colIndex.productName] ?? "").trim();
+      const rawPrice = (row[colIndex.price] ?? "").trim();
 
       if (!effectiveCategory || !rawName || !rawPrice) continue;
 
       const price = parseNumericPrice(rawPrice);
       if (price === null) continue;
 
-      const rawProfit = getVal(["profit", "الربح"]);
+      const rawProfit = colIndex.profit !== -1 ? row[colIndex.profit] : undefined;
       const profit = parseNumericProfit(rawProfit);
 
-      const description = String(getVal(["description", "الوصف"])).trim();
+      const description =
+        colIndex.description !== -1 ? (row[colIndex.description] ?? "").trim() : "";
 
-      const primaryImageRaw = String(getVal(["primary image", "image", "الصورة", "الصورة الرئيسية"])).trim();
+      const primaryImageRaw =
+        colIndex.primaryImage !== -1 ? (row[colIndex.primaryImage] ?? "").trim() : "";
       const primaryUrls = extractUrls([primaryImageRaw]);
       const primaryImage = primaryUrls[0] || "";
 
-      const extraImagesRaw = String(getVal(["extra images", "صور اضافية"])).trim();
-      const extraImages = extractUrls([extraImagesRaw]).filter((u) => u !== primaryImage);
+      const extraCells: string[] = [];
+      if (colIndex.extraImages !== -1) {
+        extraCells.push(row[colIndex.extraImages] ?? "");
+        for (let c = colIndex.extraImages + 1; c < row.length; c++) {
+          if (!headerRow[c]) {
+            extraCells.push(row[c] ?? "");
+          }
+        }
+      }
+
+      const extraImages = extractUrls(extraCells).filter((u) => u !== primaryImage);
       const allImages = primaryImage ? [primaryImage, ...extraImages] : [...extraImages];
 
       const id = `${effectiveCategory}__${rawName}__${i}`
@@ -155,7 +233,10 @@ export async function fetchInternalCatalog(options?: {
 
     const result: InternalCatalogResult = {
       products,
-      categories: categoriesSet.size > 0 ? Array.from(categoriesSet) : [],
+      categories:
+        categoriesSet.size > 0
+          ? Array.from(categoriesSet)
+          : [],
       fetchedAt: new Date().toISOString(),
       fromFallbackCache: false,
     };
@@ -167,7 +248,7 @@ export async function fetchInternalCatalog(options?: {
 
     return result;
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Error fetching sheet data";
+    const errorMsg = err instanceof Error ? err.message : "Error fetching sheet";
     if (cachedInternalCatalog) {
       return {
         ...cachedInternalCatalog.data,
